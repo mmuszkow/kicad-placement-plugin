@@ -1,3 +1,4 @@
+import math
 import pcbnew
 import random
 import wx
@@ -27,37 +28,23 @@ class Footprint:
         fp.Value().SetVisible(val_visible)
         fp.InvalidateGeometryCaches()
 
-    def is_valid_placement(self, board):
-        if self.is_ignored:
-            return True
-
-        if not board.bbox.Contains(self.bbox):
-            return False
-
-        for footprint in board.footprints:
-            if footprint.ref == self.ref:
-                continue
-
-            if footprint.bbox.Intersects(self.bbox):
-                return False
-
-            #if footprint.bbox.Contains(self.bbox):
-            #    return False
-
-        return True
-
-    def apply(self, kc_board):
-        fp = kc_board.FindFootprintByReference(self.ref)
-        if fp is not None:
-            fp.SetPosition(self.pos)
-
 class Board:
     def __init__(self, board, ignored_list):
         self.bbox = board.GetBoardEdgesBoundingBox()
         self.footprints = [Footprint(fp, fp.GetReference() in ignored_list) for fp in board.GetFootprints()]
         self.margin = 100
 
-    def try_move_random(self):
+    def maximize_goal(self):
+        dist_sum = 0.0
+        for fp in self.footprints:
+            c = fp.bbox.Centre()
+            for fp2 in self.footprints:
+                if fp2.ref != fp.ref:
+                    c2 = fp2.bbox.Centre()
+                    dist_sum += math.sqrt((c.x - c2.x)**2 + (c.y - c2.y)**2)
+        return dist_sum
+
+    def step(self):
         eligible = [fp for fp in self.footprints if not fp.is_ignored]
         if len(eligible) == 0:
             return False
@@ -78,10 +65,27 @@ class Board:
             if fp2.ref != fp.ref and test_bbox.Intersects(fp2.bbox):
                 return False
 
+        pre_rating = self.maximize_goal()
+        pre_bbox = pcbnew.BOX2I(fp.bbox.GetPosition(), fp.bbox.GetSize())
+        pre_pos = pcbnew.VECTOR2I(fp.pos)
+
         offset = rand_pos - fp.bbox.GetPosition()
         fp.bbox = test_bbox
         fp.pos += offset
+        post_rating = self.maximize_goal()
+
+        if post_rating < pre_rating:
+            fp.bbox = pre_bbox
+            fp.pos = pre_pos
+            return False
+
         return True
+
+    def apply(self, kc_board):
+        for fp in self.footprints:
+            kc_fp = kc_board.FindFootprintByReference(fp.ref)
+            if kc_fp is not None:
+                kc_fp.SetPosition(fp.pos)
 
 def delete_tracks_and_vias(board):
     tracks = board.GetTracks()
@@ -102,9 +106,8 @@ class PlaceEquallyPlugin(pcbnew.ActionPlugin):
         kc_board = pcbnew.GetBoard()
         board = Board(kc_board, ignored_list)
         for i in range(100):
-            board.try_move_random()
-        for fp in board.footprints:
-            fp.apply(kc_board)
+            board.step()
+        board.apply(kc_board)
 
 PlaceEquallyPlugin().register()
 
