@@ -1,6 +1,7 @@
 import math
 import pcbnew
 import random
+import threading
 import wx
 
 def debug(msg):
@@ -131,21 +132,70 @@ def delete_tracks_and_vias(board):
     for t in to_delete:
         board.Remove(t)
 
-class PlaceEquallyPlugin(pcbnew.ActionPlugin):
+class StatusDialog(wx.Dialog):
+    def __init__(self, parent):
+        super().__init__(parent, title='Placement', size=(400, 200))
+
+        # controls
+        self.ignored_label = wx.StaticText(self, label='Ignored:')
+        self.ignored_text = wx.TextCtrl(self, value='')
+        self.iter_label = wx.StaticText(self, label='Iterations:')
+        self.iter_spin = wx.SpinCtrl(self, min=1, max=1000000, initial=100000)
+        self.progress = wx.Gauge(self, range=100, size=(250, 25))
+        self.start_button = wx.Button(self, label='Start')
+
+        # layout
+        grid = wx.FlexGridSizer(cols=2, hgap=5, vgap=5)
+        grid.AddMany([
+            (self.ignored_label), (self.ignored_text, 1, wx.EXPAND),
+            (self.iter_label), (self.iter_spin, 1, wx.EXPAND),
+        ])
+        grid.AddGrowableCol(1, 1)
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
+        sizer.Add(self.progress, 0, wx.EXPAND | wx.ALL, 10)
+        sizer.Add(self.start_button, 0, wx.ALIGN_CENTER | wx.ALL, 10)
+        self.SetSizerAndFit(sizer)
+
+        self.start_button.Bind(wx.EVT_BUTTON, self.on_start)
+
+    def on_start(self, event):
+        self.start_button.Disable()
+        self.progress.SetValue(0)
+
+        thread = threading.Thread(target=self.run_optimization)
+        thread.start()
+
+    def run_optimization(self):
+        ignored_list = self.ignored_text.GetValue().split(',')
+        kc_board = pcbnew.GetBoard()
+        board = Board(kc_board, ignored_list)
+        max_iter = self.iter_spin.GetValue()
+        last_percent = 0
+        for i in range(max_iter):
+            board.step()
+            percent = ((i + 1) / max_iter) * 100
+            if percent != last_percent:
+                wx.CallAfter(self.progress.SetValue, percent)
+        
+        board.apply(kc_board)
+        wx.CallAfter(self.status_text.SetLabel, 'Done')
+        wx.CallAfter(self.start_button.Enable)
+
+
+class PlacementActionPlugin(pcbnew.ActionPlugin):
     def defaults(self):
-        self.name = 'Place equally'
+        self.name = 'Placement'
         self.category = 'Test'
-        self.description = 'Plugin that places components equally'
+        self.description = 'Automatic placement of footprints'
         self.show_toolbar_button = True
         self.icon_file_name = ''
 
     def Run(self):
-        ignored_list = ['J1', 'U3', 'J4', 'J3', 'Y1', 'J2']
-        kc_board = pcbnew.GetBoard()
-        board = Board(kc_board, ignored_list)
-        for i in range(100000):
-            board.step()
-        board.apply(kc_board)
+        dlg = StatusDialog(None)
+        dlg.ShowModal()
+        dlg.Destroy()
 
-PlaceEquallyPlugin().register()
+PlacementActionPlugin().register()
 
